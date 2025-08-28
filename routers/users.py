@@ -7,6 +7,10 @@ from sqlmodel import Session, select
 from data.database import get_session
 from models.users import User, UserCreate, UserRead, UserUpdate, Role
 
+# ✅ needed imports
+from routers.auth import CurrentUser
+from core.security import get_password_hash, verify_password
+
 router = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -14,7 +18,6 @@ router = APIRouter(prefix="/users", tags=["users"])
 # Helpers
 # ---------------------------
 def to_user_read(u: User) -> UserRead:
-    """Convert a User ORM object to a UserRead schema."""
     return UserRead.model_validate(u)
 
 
@@ -24,12 +27,9 @@ def to_user_read(u: User) -> UserRead:
 @router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreate, session: Session = Depends(get_session)):
     # Uniqueness checks
-    existing_username = session.exec(select(User).where(User.username == payload.username)).first()
-    if existing_username:
+    if session.exec(select(User).where(User.username == payload.username)).first():
         raise HTTPException(status_code=400, detail="Username already exists")
-
-    existing_email = session.exec(select(User).where(User.email == payload.email)).first()
-    if existing_email:
+    if session.exec(select(User).where(User.email == payload.email)).first():
         raise HTTPException(status_code=400, detail="Email already exists")
 
     user = User(
@@ -37,8 +37,8 @@ def create_user(payload: UserCreate, session: Session = Depends(get_session)):
         email=payload.email,
         full_name=payload.full_name,
         role=Role(payload.role),
-        # ⚠️ TODO: hash password before storing
-        password_hash=payload.password,
+        # ✅ hash password
+        password_hash=get_password_hash(payload.password),
     )
     session.add(user)
     session.commit()
@@ -50,6 +50,58 @@ def create_user(payload: UserCreate, session: Session = Depends(get_session)):
 def list_users(session: Session = Depends(get_session)):
     users = session.exec(select(User)).all()
     return [to_user_read(u) for u in users]
+
+
+# ---------------------------
+# Me (current user) Endpoints  ← keep these BEFORE "/{user_id}"
+# ---------------------------
+@router.get("/me", response_model=UserRead)
+def get_me(user: User = Depends(CurrentUser)):
+    return to_user_read(user)
+
+
+@router.patch("/me", response_model=UserRead)
+def update_me(
+    payload: dict,
+    session: Session = Depends(get_session),
+    user: User = Depends(CurrentUser),
+):
+    email = payload.get("email")
+    full_name = payload.get("full_name")
+
+    if email and email != user.email:
+        exists = session.exec(select(User).where(User.email == email)).first()
+        if exists and exists.id != user.id:
+            raise HTTPException(status_code=400, detail="Email already exists")
+        user.email = email
+
+    if full_name is not None:
+        user.full_name = full_name
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return to_user_read(user)
+
+
+@router.patch("/me/password")
+def change_my_password(
+    payload: dict,
+    session: Session = Depends(get_session),
+    user: User = Depends(CurrentUser),
+):
+    current_password = payload.get("current_password")
+    new_password = payload.get("new_password")
+
+    if not new_password:
+        raise HTTPException(status_code=400, detail="New password required")
+    if not current_password or not verify_password(current_password, user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    user.password_hash = get_password_hash(new_password)
+    session.add(user)
+    session.commit()
+    return {"ok": True}
 
 
 @router.get("/{user_id}", response_model=UserRead)
@@ -91,7 +143,8 @@ def update_user(user_id: str, payload: UserUpdate, session: Session = Depends(ge
         user.role = Role(data["role"])
 
     if "password" in data and data["password"] is not None:
-        user.password_hash = data["password"]  # ⚠️ TODO: hash
+        # ✅ hash on update
+        user.password_hash = get_password_hash(data["password"])
 
     session.add(user)
     session.commit()
