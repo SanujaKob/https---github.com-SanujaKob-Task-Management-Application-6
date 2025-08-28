@@ -9,7 +9,7 @@ def short_uuid() -> str:
 
 
 # ---------------------------
-# Config for Pydantic v2
+# Config for Pydantic v2 good model
 # ---------------------------
 class ConfiguredBase(SQLModel):
     model_config = {
