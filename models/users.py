@@ -56,17 +56,17 @@ class User(UserBase, table=True):
 
     Represents the actual 'users' table in SQLite.
     Extends UserBase by adding:
-        - id:           Unique 5-character string ID
-        - password_hash: Placeholder for password hashing
-        - created_at:   Timestamp when the user was created
-        - updated_at:   Timestamp when the user was last updated
-        - tasks:        Relationship to tasks assigned to this user
+        - id:            Unique 5-character string ID
+        - password_hash: Bcrypt password hash (matches DB column)
+        - created_at:    Timestamp when the user was created
+        - updated_at:    Timestamp when the user was last updated
+        - tasks:         Relationship to tasks assigned to this user
     """
-
-    __tablename__ = "users"  # ← explicit table name
+    __tablename__ = "users"  # must match existing table name
 
     id: str = Field(default_factory=short_uuid, primary_key=True, index=True)
-    password_hash: Optional[str] = None
+    # IMPORTANT: use the same column name your DB has
+    password_hash: Optional[str] = Field(default=None, description="bcrypt hash")
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

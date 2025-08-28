@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from data.database import init_db
-from routers import users, tasks
+from routers import users, tasks, auth  # <-- add auth
 
 # --- FastAPI instance ---
 app = FastAPI(
@@ -33,6 +33,7 @@ def on_startup():
     init_db()
 
 # --- Routers (mounted under /api) ---
+app.include_router(auth.router,  prefix="/api")  # <-- login at POST /api/auth/login
 app.include_router(users.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 

@@ -19,8 +19,8 @@ def init_db() -> None:
 
     Creates all tables defined in SQLModel metadata if they don't already exist.
     """
-    import models.tasks  # noqa: F401 (ensures models are imported)
-    import models.users  # noqa: F401
+    import models.tasks    # register Task first
+    import models.users    # then User (which references Task)
 
     SQLModel.metadata.create_all(engine)
 
@@ -33,3 +33,6 @@ def get_session() -> Session:
     """
     with Session(engine) as session:
         yield session
+
+# Backwards-compat for routers that expect get_db()
+get_db = get_session
