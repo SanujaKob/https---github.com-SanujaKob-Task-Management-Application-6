@@ -160,3 +160,4 @@ def delete_user(user_id: str, session: Session = Depends(get_session)):
     session.delete(user)
     session.commit()
     return None
+
