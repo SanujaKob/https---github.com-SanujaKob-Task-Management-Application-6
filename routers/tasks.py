@@ -1,13 +1,13 @@
 # routers/tasks.py
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
 from sqlmodel import Session, select
 from sqlalchemy import or_, func, cast, String
 
 from data.database import get_session
-from models.tasks import Task, TaskCreate, TaskRead, TaskUpdate
+from models.tasks import Task, TaskCreate, TaskRead
 from routers.auth import get_current_user
 
 # Optional role import
@@ -112,6 +112,22 @@ def resolve_task(session: Session, task_key: str) -> Optional[Task]:
         return t
     return session.exec(select(Task).where(cast(Task.id, String) == task_key)).first()
 
+def parse_due_date(val):
+    """Accept 'YYYY-MM-DD', ISO string, date, or datetime; return datetime or None."""
+    if not val:
+        return None
+    try:
+        if isinstance(val, datetime):
+            return val
+        if isinstance(val, date):
+            return datetime(val.year, val.month, val.day)
+        s = str(val).strip()
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":
+            return datetime.fromisoformat(s + "T00:00:00")
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
 def apply_common_filters(
     stmt,
     q: Optional[str],
@@ -215,7 +231,35 @@ def get_task(task_key: str, session: Session = Depends(get_session)):
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 def create_task(payload: TaskCreate, session: Session = Depends(get_session)):
-    t = Task(**payload.model_dump())
+    # Accept FE aliases (percent_complete) and tolerant due_date
+    data = payload.model_dump()
+    if "percent_complete" in data and "progress" not in data:
+        try:
+            pc = int(float(data.get("percent_complete") or 0))
+            data["progress"] = max(0, min(100, pc))
+        except Exception:
+            data["progress"] = 0
+        data.pop("percent_complete", None)
+
+    if "due_date" in data:
+        parsed = parse_due_date(data.get("due_date"))
+        data["due_date"] = parsed
+
+    # Normalize enums if present
+    if "status" in data and data["status"] is not None:
+        s = canon_status(data["status"])
+        if s is not None:
+            data["status"] = s
+        else:
+            data.pop("status", None)
+    if "priority" in data and data["priority"] is not None:
+        p = canon_priority(data["priority"])
+        if p is not None:
+            data["priority"] = p
+        else:
+            data.pop("priority", None)
+
+    t = Task(**data)
     now = datetime.utcnow()
     if not getattr(t, "created_at", None):
         t.created_at = now
@@ -226,12 +270,17 @@ def create_task(payload: TaskCreate, session: Session = Depends(get_session)):
     return to_read(t)
 
 @router.put("/{task_key}", response_model=TaskRead)
-def update_task(task_key: str, payload: TaskUpdate, session: Session = Depends(get_session)):
+def update_task(
+    task_key: str,
+    payload: dict = Body(...),             # <— accept raw dict to avoid schema dropping fields
+    session: Session = Depends(get_session),
+):
     t = resolve_task(session, task_key)
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    data = payload.model_dump(exclude_unset=True)
+    # Work on a mutable copy
+    data = dict(payload or {})
 
     # Normalize (forgiving: blank/invalid -> ignore field)
     if "status" in data:
@@ -248,8 +297,27 @@ def update_task(task_key: str, payload: TaskUpdate, session: Session = Depends(g
         else:
             data.pop("priority", None)
 
+    # Accept FE alias for progress
+    if "percent_complete" in data:
+        try:
+            pc = int(float(data.get("percent_complete") or 0))
+            data["progress"] = max(0, min(100, pc))
+        except Exception:
+            pass
+        data.pop("percent_complete", None)
+
+    # Tolerant due_date parsing
+    if "due_date" in data:
+        parsed = parse_due_date(data.get("due_date"))
+        if parsed is not None:
+            data["due_date"] = parsed
+        else:
+            data.pop("due_date", None)
+
+    # Apply fields
     for k, v in data.items():
         setattr(t, k, v)
+
     t.updated_at = datetime.utcnow()
     session.add(t)
     session.commit()
